@@ -1,5 +1,5 @@
 
-# $Id: Remote.pm,v 1.15 2003/02/18 20:42:33 nwiger Exp $
+# $Id: Remote.pm,v 1.16 2003/03/04 20:07:11 nwiger Exp $
 ####################################################################
 #
 # Copyright (c) 1999-2001 Nathan Wiger <nate@nateware.com>
@@ -58,7 +58,7 @@ use Exporter;
 );
 
 # Straight from CPAN
-$VERSION = do { my @r=(q$Revision: 1.15 $=~/\d+/g); sprintf "%d."."%02d"x$#r,@r }; 
+$VERSION = do { my @r=(q$Revision: 1.16 $=~/\d+/g); sprintf "%d."."%02d"x$#r,@r }; 
 
 # Errors
 use Carp;
@@ -217,7 +217,7 @@ sub _parsepath {
    my($rhost, $rfile) = split ':', $file;
 
    return(undef, $rhost) unless $rfile; # return the file if no colon (faster)
-   if($hostname =~ /^$rhost\.?.*/) {
+   if ($hostname =~ /^$rhost(\.|$)/) {  # fixed per David Robbins
       return(undef, $rfile); # file is actually local
    }
    return($rhost, $rfile); # file is remote after all
@@ -1297,7 +1297,7 @@ Please be specific and include the version of C<File::Remote> you're using.
 
 =head1 VERSION
 
-$Id: Remote.pm,v 1.15 2003/02/18 20:42:33 nwiger Exp $
+$Id: Remote.pm,v 1.16 2003/03/04 20:07:11 nwiger Exp $
 
 =head1 AUTHOR
 
