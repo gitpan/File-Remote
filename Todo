@@ -1,6 +1,5 @@
 
-As of v1.11, still need to create equivalents to these
-functions:
+Still need to create equivalents to these functions:
 
    flock    fcntl    dbmopen    dbmclose
    opendir  readdir  closedir   stat

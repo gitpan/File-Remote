@@ -1,8 +1,8 @@
 
-# $Id: Remote.pm,v 1.16 2003/03/04 20:07:11 nwiger Exp $
+# $Id: Remote.pm,v 1.17 2005/01/10 21:47:52 nwiger Exp $
 ####################################################################
 #
-# Copyright (c) 1999-2001 Nathan Wiger <nate@nateware.com>
+# Copyright (c) 1998-2003 Nathan Wiger <nate@sun.com>
 #
 # This module takes care of dealing with files regardless of whether
 # they're local or remote. It allows you to create and edit files
@@ -58,7 +58,7 @@ use Exporter;
 );
 
 # Straight from CPAN
-$VERSION = do { my @r=(q$Revision: 1.16 $=~/\d+/g); sprintf "%d."."%02d"x$#r,@r }; 
+$VERSION = do { my @r=(q$Revision: 1.17 $=~/\d+/g); sprintf "%d."."%02d"x$#r,@r }; 
 
 # Errors
 use Carp;
@@ -209,15 +209,17 @@ sub _system {
 # This is used to parse the $path param to look for host:/file
 # This always returns an array, the deal is that if the file
 # is remote, you get a host (arg1). Otherwise, it's undef.
+#
+# Thanks to David Robins and Rob Mah for their fixes to this sub.
 #######
 
 sub _parsepath {
 
    my($self, $file) = _self_or_default(@_);
-   my($rhost, $rfile) = split ':', $file;
+   my($rhost, $rfile) = split ':', $file, 2;
 
-   return(undef, $rhost) unless $rfile; # return the file if no colon (faster)
-   if ($hostname =~ /^$rhost(\.|$)/) {  # fixed per David Robbins
+   return(undef, $rhost) unless $rfile;    # return the file if no colon (faster)
+   if ($hostname =~ /^$rhost(\.|$)/ && $rfile =~ /^\//) {
       return(undef, $rfile); # file is actually local
    }
    return($rhost, $rfile); # file is remote after all
@@ -240,6 +242,7 @@ sub _to_filehandle {
 
    # This is the majority - bareword filehandles
    unless (ref $thingy) {
+      no strict 'refs';
       return \*$thingy if $thingy =~ /^\*/;	# glob like '*main::FILE'
       local *globby = join '::', caller(1) || 'main', $thingy;
       return *globby;
@@ -1297,11 +1300,11 @@ Please be specific and include the version of C<File::Remote> you're using.
 
 =head1 VERSION
 
-$Id: Remote.pm,v 1.16 2003/03/04 20:07:11 nwiger Exp $
+$Id: Remote.pm,v 1.17 2005/01/10 21:47:52 nwiger Exp $
 
 =head1 AUTHOR
 
-Copyright (c) 1998-2001 Nathan Wiger, Nateware <nate@nateware.com>.
+Copyright (c) 1998-2003 Nathan Wiger, Sun Microsystems <nate@sun.com>.
 All Rights Reserved.
 
 This module is free software; you may copy this under the terms of
