@@ -1,0 +1,56 @@
+Copyright (c) 1998-2000, Nathan Wiger (nate@sun.com). All
+rights reserved.
+
+File::Remote allows you to transparently work with both local
+and remote files, without having to know which is which or
+even care.  It has replacements for the Perl builtin file 
+functions such as open(), close(), and so on which will handle
+both local AND remote files.  This means that you can use
+File::Remote for *all* your file operations since it will handle
+any type of file you throw at it (it passes local files through
+to the Perl core functions).
+
+This means you don't have to put a whole bunch of checks in
+your code for whether a file is remote, and if so use rsh/rcp,
+etc - this module does all of that transparently.  For example,
+this module allows you to do this:
+
+   # Replace Perl builtin functions
+   use File::Remote qw(:replace);
+
+   open(FILE, ">> host:/path/to/file") or die "Can't open: $!\n";
+   print FILE "New line\n";
+   close(FILE);
+
+   open(FILE2, "< /local/file");	# still works!
+   print while (<FILE2>);
+   close(FILE2);
+
+File::Remote supports both and object-oriented interface and
+a function-oriented interface (shown above), and supports all
+of the following standard file functions:
+
+   open    close    touch   unlink   copy   move
+   mkdir   rmdir    chmod   chown
+
+As well a few others:
+
+   readfile	- read whole file in one call
+   writefile	- write whole file in one call
+   append	- append to file in one call
+   prepend	- prepend to file in one call
+   backup	- make a backup copy of a file
+
+To install the software:
+
+   gunzip File-Remote-1.10.tar.gz
+   tar xvf File-Remote-1.10.tar
+   cd File-Remote-1.10
+   perl Makefile.PL
+   make && make test && make install
+
+This module is free software; you may copy this under the
+terms of the GNU General Public License, or the Artistic
+License, copies of which should have accompanied your Perl
+kit.
+
