@@ -3,3 +3,9 @@ Revision history for Perl extension File::Remote.
 1.10  Mon Apr 17 12:48:50 2000
 	- original version; created by h2xs 1.19
 
+1.11  Tue Nov 28 12:39:29 2000 
+        - rewrote to use strict
+        - fixed miscellaneous warnings under -w
+        - added symlink(), link(), and readlink()
+        - cleaned up open filehandles END() code
+

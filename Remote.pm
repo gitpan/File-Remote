@@ -1,8 +1,8 @@
 
+# $Id: Remote.pm,v 1.12 2000/11/30 00:29:53 nwiger Exp $
 ####################################################################
-# $Id: Remote.pm,v 1.10 2000/04/17 19:48:07 nwiger Exp $
 #
-# Copyright (c) 1999-2000 Nathan Wiger (nate@wiger.org)
+# Copyright (c) 1999-2000 Nathan Wiger <nate@nateware.com>
 #
 # This module takes care of dealing with files regardless of whether
 # they're local or remote. It allows you to create and edit files
@@ -28,29 +28,36 @@
 # Basic module setup
 require 5.003;
 package File::Remote;
+
+use strict;
+use vars qw(@ISA @EXPORT_OK %EXPORT_TAGS $VERSION);
 use Exporter;
 @ISA = qw(Exporter);
 
-@EXPORT_OK   = qw(rreadfile rwritefile rmkdir rrmdir rrm runlink rcp rcopy rtouch rchown
-		  rchmod rmove rmv rbackup setrsh setrcp settmp ropen rclose rappend rprepend
-		  readfile writefile mkdir rmdir rm unlink cp copy touch chown
-		  chmod move mv backup open close append prepend);
+@EXPORT_OK   = qw(
+   rreadfile rwritefile rmkdir rrmdir rrm runlink rcp rcopy rtouch rchown
+   rchmod rmove rmv rbackup setrsh setrcp settmp ropen rclose rappend rprepend
+   rsymlink rlink readfile writefile mkdir rmdir rm unlink cp copy touch chown
+   chmod move mv backup open close append prepend symlink link readlink rreadlink
+);
 
-%EXPORT_TAGS = ('files' => [qw(ropen rclose rreadfile rwritefile runlink rcopy rtouch rmove
-			       rbackup rappend rprepend)],
-		'config'=> [qw(setrsh setrcp settmp)],
-                'dirs'  => [qw(rmkdir rrmdir)],
-                'perms' => [qw(rchown rchmod)],
-                'standard' => [qw(ropen rclose rreadfile rwritefile runlink rcopy rtouch rmove
-				  rbackup rappend rprepend setrsh setrcp settmp rmkdir rrmdir
-				  rchown rchmod)],
-                'aliases'  => [qw(rrm rmv rcp)],
-		'replace' => [qw(open close readfile writefile unlink rm copy cp touch move mv
-				 backup append prepend setrsh setrcp settmp mkdir rmdir chown chmod)]
-		);
+%EXPORT_TAGS = (
+   files  => [qw(ropen rclose rreadfile rwritefile runlink rcopy rtouch rmove
+		 rbackup rappend rprepend rlink rsymlink rreadlink)],
+   config => [qw(setrsh setrcp settmp)],
+   dirs   => [qw(rmkdir rrmdir)],
+   perms  => [qw(rchown rchmod)],
+   standard => [qw(ropen rclose rreadfile rwritefile runlink rcopy rtouch rmove
+                   rbackup rappend rprepend setrsh setrcp settmp rmkdir rrmdir
+                   rchown rchmod rsymlink rlink rreadlink)],
+   aliases => [qw(rrm rmv rcp)],
+   replace => [qw(open close readfile writefile unlink rm copy cp touch move mv
+                  backup append prepend setrsh setrcp settmp mkdir rmdir chown chmod
+		  symlink link readlink)]
+);
 
 # Straight from CPAN
-$VERSION = do { my @r=(q$Revision: 1.10 $=~/\d+/g); sprintf "%d."."%02d"x$#r,@r }; 
+$VERSION = do { my @r=(q$Revision: 1.12 $=~/\d+/g); sprintf "%d."."%02d"x$#r,@r }; 
 
 # Errors
 use Carp;
@@ -65,32 +72,35 @@ use Sys::Hostname;
 #======================== Configuration ==========================
 
 # Defaults
-$RSH = "/usr/bin/rsh";
-$RCP = "/usr/bin/rcp";
-$TMP = "/tmp";
+my @OPT = (
+   rsh => "/usr/bin/rsh",
+   rcp => "/usr/bin/rcp",
+   tmp => "/tmp"
+);
 
 # This determines whether or not we should spend some time trying
 # to see if rsh and rcp are set to valid values before using them.
 # By default these checks are not done because they're SLOW...
 # Note that if you enable these then you must use absolute paths
 # when calling setrsh and setrcp; "setrsh('ssh')" will fail.
-$CHECK_RSH_IS_VALID = 0;
-$CHECK_RCP_IS_VALID = 0;
+my $CHECK_RSH_IS_VALID = 0;
+my $CHECK_RCP_IS_VALID = 0;
 
 # This is whether or not to spend the extra cycles (and network
 # latency) checking whether a remote file is actually writeable
 # when we try to open it with > or >>. Note: Unsetting this can
 # result in strange and unpredictable behavior, messing with it
 # it NOT recommended.
-$CHECK_REMOTE_FILES = 1;
+my $CHECK_REMOTE_FILES = 1;
 
 #======================== Misc. Settings =========================
 
 # This is the default class for the File::Remote object (from CGI.pm!)
-$DefaultClass ||= 'File::Remote';
+my $DefaultClass ||= 'File::Remote';
+my $DefaultClassObject;   # holds an object later on
 
 # This should not need to be overridden
-($hostname = hostname()) =~ s/\..*//;
+(my $hostname = hostname()) =~ s/\..*//;
 
 # Need to check our OS. As of this release, only UNIX is supported;
 # perhaps this will change in the future, but probably not.
@@ -113,11 +123,10 @@ sub new {
    # Easy mostly-std new()
    my $self = shift;
    my $class = ref($self) || $self || $DefaultClass;
-   return bless {
-       'RSH' => $File::Remote::RSH,
-       'RCP' => $File::Remote::RCP,
-       'TMP' => $File::Remote::TMP
-   }, $class;
+
+   # Add any options to our own defaults
+   my %opt = (@OPT, @_);
+   return bless \%opt, $class;
 }
 
 #------------------------------------------------
@@ -135,8 +144,8 @@ sub _self_or_default {
 
    return @_ if defined($_[0]) && (!ref($_[0])) && ($_[0] eq 'File::Remote');
    unless (defined($_[0]) && (ref($_[0]) eq 'File::Remote' || UNIVERSAL::isa($_[0],'File::Remote'))) {
-      $Q = $File::Remote::DefaultClass->new unless defined($Q);
-      unshift(@_, $Q);
+      $DefaultClassObject = $DefaultClass->new unless defined($DefaultClassObject);
+      unshift(@_, $DefaultClassObject);
    }
    return @_;
 }
@@ -174,7 +183,7 @@ sub _tmpfile {
 
 sub _system {
    my($self, @cmd) = _self_or_default(@_);
-   chomp($return = `@cmd 2>&1 1>/dev/null || echo 32`);	# return "Broken pipe" if cmd invalid
+   chomp(my $return = `@cmd 2>&1 1>/dev/null || echo 32`);	# return "Broken pipe" if cmd invalid
    if ($return) {
       # if echo'ed an int (internal tests), use it, else use "Permission denied" (13)
       $return =~ m/^(\d+)$/;
@@ -253,41 +262,41 @@ sub _to_filehandle {
 #######
 
 sub setrsh {
-   # Sets the variable $self->{RSH}, which is what to use for rsh calls
+   # Sets the variable $self->{rsh}, which is what to use for rsh calls
    my($self, $value) = _self_or_default(@_);
-   $self->{RSH} = $value if $value;
+   $self->{rsh} = $value if $value;
 
    # This check was removed because of relative paths/speed.
    if ($CHECK_RSH_IS_VALID) {
-      croak "File::Remote::setrsh() set to non-executable file '$self->{RSH}'"
-         unless (-x $self->{RSH});
+      croak "File::Remote::setrsh() set to non-executable file '$self->{rsh}'"
+         unless (-x $self->{rsh});
    }
 
-   return $self->{RSH};
+   return $self->{rsh};
 }
    
 sub setrcp {
-   # Sets the variable $self->{RCP}, which is what to use for rcp calls
+   # Sets the variable $self->{rcp}, which is what to use for rcp calls
    my($self, $value) = _self_or_default(@_);
-   $self->{RCP} = $value if $value;
+   $self->{rcp} = $value if $value;
 
    # This check was removed because of relative paths/speed.
    if ($CHECK_RCP_IS_VALID) {
-      croak "File::Remote::setrcp() set to non-executable file '$self->{RCP}'"
-         unless (-x $self->{RCP});
+      croak "File::Remote::setrcp() set to non-executable file '$self->{rcp}'"
+         unless (-x $self->{rcp});
    }
 
-   return $self->{RCP};
+   return $self->{rcp};
 }
 
 sub settmp {
-   # Sets the variable $TMP, which refs the temp dir needed to hold
-   # temporary files during rsh/rcp calls
+   # Sets the variable $self->{tmp}, which refs the temp dir needed to
+   # hold temporary files during rsh/rcp calls
    my($self, $value) = _self_or_default(@_);
-   $self->{TMP} = $value if $value;
-   croak "File::Remote::settmp() set to non-existent dir '$self->{TMP}'"
-      unless (-d $self->{TMP});
-   return $self->{TMP};
+   $self->{tmp} = $value if $value;
+   croak "File::Remote::settmp() set to non-existent dir '$self->{tmp}'"
+      unless (-d $self->{tmp});
+   return $self->{tmp};
 }
 
 
@@ -315,7 +324,7 @@ sub open {
    # Before parsing path, need to check for <, >, etc
    $file =~ m/^([\<\>\|\+]*)\s*(.*)/;
    $file = $2;
-   $method = $1 || '<';
+   my $method = $1 || '<';
 
    croak "Unsupported file method '$method'" unless ($method =~ m/^\+?[\<\>\|]{1,2}$/);
    my($rhost, $lfile) = _parsepath($file);
@@ -481,11 +490,12 @@ sub readfile {
    my @r = <F>;
    CORE::close(F) or return undef;
 
-   # Remove the local copy
-   CORE::unlink($tmpfile);
+   # Remove the local copy if it exists.
+   # Thanks to Neville Jennings for catching this.
+   CORE::unlink($tmpfile) if $tmpfile;
 
    return @r if wantarray;
-   #return join("", @r);
+   return join("", @r);
 }
 
 #######
@@ -709,6 +719,101 @@ sub unlink {
 }
 
 #######
+# Usage: $remote->link($file);
+#
+# This links files, just like UNIX ln.
+#######
+
+*rln = \&link;
+*ln = \&link;
+*rlink = \&link;
+sub link {
+
+   # This logic is similar to copy, only if a host:/path
+   # is specified, that must be specified for both - we
+   # can't link across servers! (obviously)
+   my($self, $srcfile, $destfile) = _self_or_default(@_);
+   croak "Bad usage of File::Remote::link" unless ($srcfile && $destfile);
+   my($srhost, $slfile) = _parsepath($srcfile);
+   my($drhost, $dlfile) = _parsepath($destfile);
+
+   if($srhost && $drhost) {
+      if($srhost eq $drhost) {
+         $self->_system($self->setrsh, $srhost, "ln", $slfile, $dlfile) or return undef;
+      } else {
+         croak "Cannot link two files from different hosts!";
+      }
+   } elsif($srhost || $drhost) {
+      croak "Cannot link two files from different hosts!";
+   } else {
+      CORE::link($slfile, $dlfile) or return undef;
+   }
+   return 1;
+}
+
+#######
+# Usage: $remote->symlink($file);
+#
+# This symlinks files, just like UNIX ln -s.
+#######
+
+*rsymlink = \&symlink;
+sub symlink {
+
+   # This logic is similar to copy, only if a host:/path
+   # is specified, that must be specified for both - we
+   # can't link across servers! (obviously)
+   my($self, $srcfile, $destfile) = _self_or_default(@_);
+   croak "Bad usage of File::Remote::symlink" unless ($srcfile && $destfile);
+   my($srhost, $slfile) = _parsepath($srcfile);
+   my($drhost, $dlfile) = _parsepath($destfile);
+
+   if($srhost && $drhost) {
+      if($srhost eq $drhost) {
+         $self->_system($self->setrsh, $srhost, "ln -s", $slfile, $dlfile) or return undef;
+      } else {
+         croak "Cannot symlink two files from different hosts!";
+      }
+   } elsif($srhost || $drhost) {
+      croak "Cannot symlink two files from different hosts!";
+   } else {
+      CORE::symlink($slfile, $dlfile) or return undef;
+   }
+   return 1;
+}
+
+#######
+# Usage: $remote->readlink($file);
+#
+# This reads what a symbolic link points to
+#######
+
+*rreadlink = \&readlink;
+sub readlink {
+
+   my($self, $file) = _self_or_default(@_);
+   croak "Bad usage of File::Remote::readlink" unless ($file);
+   my($rhost, $lfile) = _parsepath($file);
+
+   if ($rhost) {
+      # this command is a little tricky, and not guaranteed
+      # to be 100% portable... note that we can't even use
+      # the _system() internal function because it's so weird...
+      my $rsh = $self->setrsh;
+      chomp(my $path = `$rsh $rhost "ls -l $lfile | awk '{print \$NF}' || echo NOPE" 2>/dev/null`);
+      if ($path eq 'NOPE') {
+         $! = 2;
+         return undef;
+      } else {
+         return $path;
+      }
+   } else {
+      return CORE::readlink($lfile);
+   }
+   return undef;
+}
+
+#######
 # Usage: $remote->backup($file, $suffix|$filename);
 #
 # Remotely backs up a file. A little tricky, but not too much.
@@ -796,10 +901,9 @@ File::Remote - Read/write/edit remote files transparently
    #  
    use File::Remote;
    my $remote = new File::Remote;
-   $remote->settmp('/var/tmp');		# custom tmp dir
  
    # Standard filehandles
-   $remote->open(FILE, '>>host:/remote/file') or die "Open: $!\n";
+   $remote->open(FILE, '>>host:/remote/file') or die $!;
    print FILE "Here's a line that's added.\n";
    $remote->close(FILE);
  
@@ -810,7 +914,7 @@ File::Remote - Read/write/edit remote files transparently
    $remote->chmod('0600', 'host:/remote/dir/file');
  
    # Move files around
-   $remote->copy('/local/file', 'host:/remote/file') or warn "Copy: $!\n";
+   $remote->copy('/local/file', 'host:/remote/file') or warn $!;
    $remote->move('host:/remote/file', '/local/file');
  
    # Read and write whole files
@@ -820,11 +924,9 @@ File::Remote - Read/write/edit remote files transparently
    # Backup a file with a suffix
    $remote->backup('host:/remote/oldfile', 'save');
  
-   # Use secure methods
-   my $secure = new File::Remote;
-   $secure->setrsh('/local/bin/ssh');	# for secure
-   $secure->setscp('/local/bin/scp');	# connections
- 
+   # Use secure connection methods
+   my $secure = new File::Remote (rsh => '/usr/local/bin/ssh',
+                                  rcp => '/usr/local/bin/scp');
    $secure->unlink('/local/file');
    $secure->rmdir('host:/remote/dir');
  
@@ -834,7 +936,7 @@ File::Remote - Read/write/edit remote files transparently
    #
    use File::Remote qw(:replace);	# special :replace tag
 
-   open(REMOTE, 'host:/remote/file') or die "Open: $!\n";
+   open(REMOTE, 'host:/remote/file') or die $!;
    print while (<REMOTE>);
    close(REMOTE);
 
@@ -845,6 +947,7 @@ File::Remote - Read/write/edit remote files transparently
    mkdir('host:/remote/dir', 0755);
    unlink('host:/remote/file');
    unlink('/local/file');		# still works too!
+   symlink('host:/remote/src', 'host:/remote/dest');
 
 =head1 DESCRIPTION
 
@@ -860,7 +963,7 @@ The nice thing about this module is that you can use it for I<all> your
 file calls, since it handles both remote and local files transparently.
 This means you don't have to put a whole bunch of checks for remote files
 in your code.  Plus, if you use the function-oriented interface along with
-the I<:replace> tag, you can actually redefine the Perl builtin file
+the C<:replace> tag, you can actually redefine the Perl builtin file
 functions so that your existing Perl scripts can automatically handle
 remote files with no re-engineering!
 
@@ -873,9 +976,7 @@ using different methods (eg, rsh vs. ssh) simultaneously:
    # Object-oriented method
    use File::Remote;
    my $remote = new File::Remote;
-   my $secure = new File::Remote;
-   $secure->setrsh('/local/bin/ssh');
-   $secure->setrcp('/local/bin/scp');
+   my $secure = new File::Remote (rsh => '/bin/ssh', rcp => '/bin/scp');
 
    # Securely copy, write, and remove a file in one swoop...
    $remote->open(LOCAL, '/local/file') or die "Open failed: $!\n";
@@ -909,7 +1010,7 @@ becomes 'ropen' in the function-oriented version:
    
 
 With the function-oriented interface there is also a special tag
-called I<:replace> which will actually replace the Perl builtin
+called C<:replace> which will actually replace the Perl builtin
 functions:
 
 
@@ -925,33 +1026,59 @@ functions:
    chown('root', 'other', '/local/new/dir');
    unlink('host:/remote/file');
 
-Since File::Remote will pass calls to local files straight through
-to Perl's core functions, you'll be able to do all this "transparently"
-and not care about the locations of the files. Plus, as mentioned above,
+This is pretty neat; since File::Remote will pass calls to local files
+straight through to Perl's core functions, you'll be able to do all this
+"transparently" and not care about the locations of the files. Plus,
 this has the big advantage of making your existing Perl scripts capable
 of dealing with remote files without having to rewrite any code.
 
 =head1 FUNCTIONS
 
 Below are each of the functions you can make use of with File::Remote.
-Remember, for the function-oriented style, unless you use the I<:replace>
+Remember, for the function-oriented style, unless you use the C<:replace>
 tag you'll have to add an extra 'r' to the start of each function name.
 For all functions, the file arg can be either local or remote.
 
-=head2 setrsh(prog) ; setrcp(prog)
+=head2 new(opt => val, opt => val)
 
-These set what to use for remote shell and copy calls, needed to
-manipulate remote files.  The defaults are /usr/bin/rsh and /usr/bin/rcp.
-For security, you can use ssh and scp (if you have them).  In both cases,
-you need to make sure you have passwordless access to the remote hosts
-holding the files to be manipulated. 
+This is the main constructor when you're using the object-oriented
+method of calling. You can pass it three arguments which change how
+it works:
 
-=head2 settmp(dir)
+   rsh  -  path to your rsh or ssh program
+   rcp  -  path to your rcp or scp program
+   tmp  -  path to your tmp directory
 
-This sets the directory to use for temporary files.  This is needed as
-a repository during remote reads and writes.
+So, for example:
 
-=head2 open(handle, file) ; close(handle)
+   use File::Remote;
+   my $secure = File::Remote->new(rsh => '/usr/local/bin/ssh',
+                                  rcp => '/usr/local/bin/scp',
+                                  tmp => '/var/run');
+   $secure->copy($src, $dest);
+
+The above would setup your $secure object so that calls to methods on
+it would use ssh and scp for connections.
+
+=head2 setrsh(prog) ; setrcp(prog) ; settmp(dir)
+
+These perform the equivalent functionality to setting the above flags,
+for use in the function-oriented method of calling. So, if you were to
+decide you didn't want to use the OO method, but instead wanted to use
+the drop-in replacement function method (which I prefer):
+
+   use File::Remote qw(:replace);
+
+   setrsh('/usr/local/bin/ssh'); 
+   setrcp('/usr/local/bin/scp'); 
+   settmp('/var/run'); 
+
+   copy($src, $dest);
+
+That chain of calls would have the exact same effect, only using the
+function-oriented format instead of the object-oriented format.
+
+=head2 open(HANDLE, file) ; close(HANDLE)
 
 Used to open and close files just like the Perl builtins. These functions
 accept both string filehandles and typeglob references.
@@ -984,6 +1111,19 @@ Change the permissions or the owner of a file.
 
 Remove a file. You can also address it as 'rm' (if you import the :aliases tag).
 
+=head2 link(file1, file2)
+
+Create a hard link between two files. The caveat to this function
+is that both files must be local, or both files must be remote.
+
+=head2 symlink(file1, file2)
+
+Works just like link only creates symbolic instead of hard links.
+
+=head2 readlink(file)
+
+This reads what a symbolic link points to, just like the Perl builtin.
+
 =head2 backup(file, [file|suffix])
 
 This backs up a file, useful if you're going to be manipulating it.
@@ -1005,7 +1145,6 @@ either append or prepend the data to the file.
 =head1 EXAMPLES
 
 Here's some more examples of how to use this module:
-
 
 =head2 1. Add a new user to /etc/passwd on your server
 
@@ -1030,12 +1169,9 @@ much cleaner...
 
    # Object-oriented method
    use File::Remote
-   my $secure = new File::Remote;
-
-   # Setup secure connections and tmpdir
-   $secure->setrsh('/local/bin/ssh');
-   $secure->setrcp('/local/bin/scp');
-   $secure->settmp('/var/stmp');
+   my $secure = File::Remote->new(rsh => '/share/bin/ssh',
+                                  rcp => '/share/bin/scp',
+                                  tmp => '/var/tmp');
 
    # Move files
    $secure->move('client:/home/bob/.cshrc', 'client:/home/bob/.cshrc.old');
@@ -1049,7 +1185,8 @@ Here we're assuming we're getting some huge datastream from some
 other process and having to dump it into a file in realtime.
 Note that the remote file won't be updated until close() is called.
 
-   # Function-oriented, no :replace tag
+   # Function-oriented, no :replace tag, so all functions
+   # will be prefixed with an 'r'
    use File::Remote qw(:standard);
 
    setrsh('/local/bin/ssh');
@@ -1082,6 +1219,11 @@ or their equivalents are executable. To change this, see the source.
 
 =head1 BUGS
 
+Because of the internal implementation of open() on remote files, it 
+is not possible to read from an ever-growing remote file ("tail" it).
+Basically, a snapshot of the remote file is taken when you open it
+for reading. Patches to overcome this limitation are welcomed.
+
 Perl scripts that are tainted or setuid might not work with File::Remote
 because of its reliance on system() calls, depending on your %ENV. To
 work around this, simply add an "undef %ENV" statement to the top of
@@ -1090,9 +1232,14 @@ your script, which you should be doing anyways.
 If you have a bug report or suggestion, please direct them to me (see below).
 Please be specific and include the version of File::Remote you're using.
 
+=head1 VERSION
+
+$Id: Remote.pm,v 1.12 2000/11/30 00:29:53 nwiger Exp $
+
 =head1 AUTHOR
 
-Copyright (c) 1998-2000, Nathan Wiger (nate@sun.com). All rights reserved.
+Copyright (c) 1998-2000 Nathan Wiger <nate@nateware.com>. All Rights
+Reserved.
 
 This module is free software; you may copy this under the terms of
 the GNU General Public License, or the Artistic License, copies of
