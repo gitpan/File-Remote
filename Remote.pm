@@ -1,5 +1,5 @@
 
-# $Id: Remote.pm,v 1.14 2001/05/04 20:54:22 nwiger Exp $
+# $Id: Remote.pm,v 1.15 2003/02/18 20:42:33 nwiger Exp $
 ####################################################################
 #
 # Copyright (c) 1999-2001 Nathan Wiger <nate@nateware.com>
@@ -30,7 +30,8 @@ require 5.005;
 package File::Remote;
 
 use strict;
-use vars qw(@ISA @EXPORT_OK %EXPORT_TAGS $VERSION);
+use vars qw(@ISA @EXPORT_OK %EXPORT_TAGS $VERSION
+            %RW_HANDLES %RO_HANDLES %RW_TMPFILES %RO_TMPFILES);
 use Exporter;
 @ISA = qw(Exporter);
 
@@ -57,7 +58,7 @@ use Exporter;
 );
 
 # Straight from CPAN
-$VERSION = do { my @r=(q$Revision: 1.14 $=~/\d+/g); sprintf "%d."."%02d"x$#r,@r }; 
+$VERSION = do { my @r=(q$Revision: 1.15 $=~/\d+/g); sprintf "%d."."%02d"x$#r,@r }; 
 
 # Errors
 use Carp;
@@ -276,7 +277,7 @@ sub setrsh {
 
    # This check was removed because of relative paths/speed.
    if ($CHECK_RSH_IS_VALID) {
-      croak "File::Remote::setrsh() set to non-executable file '$self->{rsh}'"
+      croak "setrsh() set to non-executable file '$self->{rsh}'"
          unless (-x $self->{rsh});
    }
 
@@ -290,7 +291,7 @@ sub setrcp {
 
    # This check was removed because of relative paths/speed.
    if ($CHECK_RCP_IS_VALID) {
-      croak "File::Remote::setrcp() set to non-executable file '$self->{rcp}'"
+      croak "setrcp() set to non-executable file '$self->{rcp}'"
          unless (-x $self->{rcp});
    }
 
@@ -302,7 +303,7 @@ sub settmp {
    # hold temporary files during rsh/rcp calls
    my($self, $value) = _self_or_default(@_);
    $self->{tmp} = $value if $value;
-   croak "File::Remote::settmp() set to non-existent dir '$self->{tmp}'"
+   croak "settmp() set to non-existent dir '$self->{tmp}'"
       unless (-d $self->{tmp});
    return $self->{tmp};
 }
@@ -324,7 +325,7 @@ sub settmp {
 sub open {
 
    my($self, $handle, $file) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::open(HANDLE, file)" unless ($handle && $file);
+   croak "Bad usage of open(HANDLE, file)" unless ($handle && $file);
 
    # Private vars
    my($f, $fh, $tmpfile);
@@ -346,7 +347,7 @@ sub open {
    $fh = _to_filehandle($handle) or return undef;;
 
    # Check if it's open already - if so, close it first like native Perl
-   if($File::Remote::open_handles{$fh}) {
+   if($RW_HANDLES{$fh} || $RW_HANDLES{$fh}) {
       $self->close($handle) or return undef;
    }
 
@@ -367,7 +368,7 @@ sub open {
          # Do our checks thru test calls that echo $! codes if
          # they fail...
 
-         if($File::Remote::CHECK_REMOTE_FILES) {
+         if($CHECK_REMOTE_FILES) {
             my $dir;
             ($dir = $lfile) =~ s@(.*)/.*@$1@;
             $self->_system($self->setrsh, $rhost,
@@ -378,11 +379,12 @@ sub open {
 		  fi'") or return undef;
          }
 
-         $File::Remote::open_rw_remote_handles{$fh} = $file;
-         $File::Remote::open_rw_remote_tmpfiles{$file} = $tmpfile;
+         $RW_HANDLES{$fh} = $file;
+         $RW_TMPFILES{$file} = $tmpfile;
       } else {
          # push tmpfile onto an array
-         push @File::Remote::open_ro_remote_tmpfiles, $tmpfile;
+         $RO_HANDLES{$fh} = $file;
+         $RO_TMPFILES{$file} = $tmpfile;
       }
 
       # If we escaped that mess, copy our file over locally
@@ -392,9 +394,6 @@ sub open {
    } else {
       $f = $lfile;
    }
-
-   # Add to our hash of open files when we've got it open
-   $File::Remote::open_handles{$fh} = $file;
 
    # All we do is pass it straight thru to open()
    local *fh = $fh;
@@ -412,18 +411,15 @@ sub open {
 sub close {
 
    my($self, $handle) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::close(HANDLE)" unless ($handle);
+   croak "Bad usage of close(HANDLE)" unless ($handle);
  
-   # Private vars
-   my($file, $fh, $tmpfile);
-
    # Setup filehandle and close
-   $fh = _to_filehandle($handle) or return undef;
+   my $fh = _to_filehandle($handle) or return undef;
    local *fh = $fh;
    CORE::close($fh) or return undef;
 
    # See if it's a writable remote handle
-   if($file = $File::Remote::open_rw_remote_handles{$fh}) {
+   if(my $file = delete $RW_HANDLES{$fh}) {
 
       # If it's a remote file, we have extra stuff todo. Basically,
       # we need to copy the local tmpfile over to the remote host
@@ -432,25 +428,31 @@ sub close {
 
       my($rhost, $lfile) = _parsepath($file);	
       if($rhost) {
-         $tmpfile = $File::Remote::open_rw_remote_tmpfiles{$file};
+         my $tmpfile = delete $RW_TMPFILES{$file};
          $self->copy($tmpfile, $file) or return undef;
          CORE::unlink($tmpfile);
-         delete $File::Remote::open_rw_remote_handles{$fh};
-         delete $File::Remote::open_rw_remote_tmpfiles{$file};
       }
+   } else {
+      my $tmpfile = delete $RO_HANDLES{$fh};
+      delete $RO_TMPFILES{$tmpfile} if $tmpfile;
    }
    return 1;
 }
 
 # This is a special method to close all open rw remote filehandles on exit
 END {
-   my($fh, $file);
-   while(($fh, $file) = each(%File::Remote::open_remote_handles)) {
-      carp "$fh remote filehandle left open, use File::Remote::close()" if ($^W);
+   for my $fh (keys %RW_HANDLES) {
+      carp "$fh remote filehandle left open, use close()" if ($^W);
       &close($fh);	# ignore errors, programmer should use close()
    }
-   foreach $file (@File::Remote::open_ro_remote_tmpfiles) {
-      CORE::unlink($file);
+   for my $tmpfile (values %RW_TMPFILES) {
+      CORE::unlink($tmpfile);
+   }
+   for my $fh (keys %RO_HANDLES) {
+      &close($fh);
+   }
+   for my $tmpfile (values %RO_TMPFILES) {
+      CORE::unlink($tmpfile);
    }
 }
 
@@ -463,7 +465,7 @@ END {
 *rtouch = \&touch;
 sub touch {
    my($self, $file) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::touch" unless ($file);
+   croak "Bad usage of touch" unless ($file);
    my($rhost, $lfile) = _parsepath($file);
    if($rhost) {
       $self->_system($self->setrsh, $rhost, "touch $lfile") or return undef;
@@ -486,7 +488,7 @@ sub touch {
 sub readfile {
 
    my($self, $file) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::readfile" unless ($file);
+   croak "Bad usage of readfile" unless ($file);
    my($rhost, $lfile) = _parsepath($file);
 
    # Private vars
@@ -527,7 +529,7 @@ sub readfile {
 sub writefile {
 
    my($self, $file, @data) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::writefile" unless ($file);
+   croak "Bad usage of writefile" unless ($file);
    my($rhost, $lfile) = _parsepath($file);
 
    # Private vars
@@ -572,7 +574,7 @@ sub mkdir {
 
    # Local dirs go to mkpath, remote to mkdir -p
    my($self, $dir, $mode) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::mkdir" unless ($dir);
+   croak "Bad usage of mkdir" unless ($dir);
    my($rhost, $ldir) = _parsepath($dir);
    #$mode = '0755' unless $mode;
 
@@ -594,7 +596,7 @@ sub mkdir {
 sub rmdir {
 
    my($self, $dir, $recurse) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::rmdir" unless ($dir);
+   croak "Bad usage of rmdir" unless ($dir);
    my($rhost, $ldir) = _parsepath($dir);
    $recurse = 1 unless defined($recurse);
 
@@ -629,7 +631,7 @@ sub copy {
    # This copies the given file, either locally or remotely
    # depending on whether or not it's remote or not.
    my($self, $srcfile, $destfile) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::copy" unless ($srcfile && $destfile);
+   croak "Bad usage of copy" unless ($srcfile && $destfile);
    my($srhost, $slfile) = _parsepath($srcfile);
    my($drhost, $dlfile) = _parsepath($destfile);
 
@@ -677,7 +679,7 @@ sub chown {
    # If remote, subshell it; else, use Perl's chown
    # Form of chown is the same as normal chown
    my($self, $uid, $gid, $file) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::chown" unless ($uid && $gid && $file);
+   croak "Bad usage of chown" unless ($uid && $gid && $file);
    my($rhost, $lfile) = _parsepath($file);
 
    if($rhost) {
@@ -702,7 +704,7 @@ sub chmod {
 
    # Same as chown, really easy
    my($self, $mode, $file) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::chmod" unless ($mode && $file);
+   croak "Bad usage of chmod" unless ($mode && $file);
    my($rhost, $lfile) = _parsepath($file);
 
    if($rhost) {
@@ -726,7 +728,7 @@ sub unlink {
 
    # Really easy
    my($self, $file) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::unlink" unless ($file);
+   croak "Bad usage of unlink" unless ($file);
    my($rhost, $lfile) = _parsepath($file);
 
    if($rhost) {
@@ -752,7 +754,7 @@ sub link {
    # is specified, that must be specified for both - we
    # can't link across servers! (obviously)
    my($self, $srcfile, $destfile) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::link" unless ($srcfile && $destfile);
+   croak "Bad usage of link" unless ($srcfile && $destfile);
    my($srhost, $slfile) = _parsepath($srcfile);
    my($drhost, $dlfile) = _parsepath($destfile);
 
@@ -783,7 +785,7 @@ sub symlink {
    # is specified, that must be specified for both - we
    # can't link across servers! (obviously)
    my($self, $srcfile, $destfile) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::symlink" unless ($srcfile && $destfile);
+   croak "Bad usage of symlink" unless ($srcfile && $destfile);
    my($srhost, $slfile) = _parsepath($srcfile);
    my($drhost, $dlfile) = _parsepath($destfile);
 
@@ -811,7 +813,7 @@ sub symlink {
 sub readlink {
 
    my($self, $file) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::readlink" unless ($file);
+   croak "Bad usage of readlink" unless ($file);
    my($rhost, $lfile) = _parsepath($file);
 
    if ($rhost) {
@@ -851,7 +853,7 @@ sub readlink {
 sub backup {
 
    my($self, $file, $suffix) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::backup" unless ($file);
+   croak "Bad usage of backup" unless ($file);
    $suffix ||= 'bkup';
 
    my($rhost, $lfile) = _parsepath($file);
@@ -876,7 +878,7 @@ sub backup {
 *rappend = \&append;
 sub append {
    my($self, $file, @file) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::append" unless ($file);
+   croak "Bad usage of append" unless ($file);
    my @prefile = $self->readfile($file) or return undef;
    my @newfile = (@prefile, @file) or return undef;
    $self->writefile($file, @newfile) or return undef;
@@ -893,7 +895,7 @@ sub append {
 *rprepend = \&prepend;
 sub prepend {
    my($self, $file, @file) = _self_or_default(@_);
-   croak "Bad usage of File::Remote::prepend" unless ($file);
+   croak "Bad usage of prepend" unless ($file);
    my @postfile = $self->readfile($file) or return undef;
    my @newfile = (@file, @postfile) or return undef;
    $self->writefile($file, @newfile) or return undef;
@@ -1168,7 +1170,7 @@ This reads what a symbolic link points to, just like the Perl builtin.
 This backs up a file, useful if you're going to be manipulating it.
 If you just call it without the optional second filename or suffix,
 the suffix 'bkup' will be added to the file.  Either file can be local
-or remote; this is really just a front-end to File::Remote::copy().
+or remote; this is really just a front-end to copy().
 
 =head2 readfile(file) , writefile(file, @data)
 
@@ -1295,7 +1297,7 @@ Please be specific and include the version of C<File::Remote> you're using.
 
 =head1 VERSION
 
-$Id: Remote.pm,v 1.14 2001/05/04 20:54:22 nwiger Exp $
+$Id: Remote.pm,v 1.15 2003/02/18 20:42:33 nwiger Exp $
 
 =head1 AUTHOR
 
